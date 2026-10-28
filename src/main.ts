@@ -418,4 +418,5 @@ function startValley() {
     labels.render(scene, camera);
   });
   document.body.classList.add('ready');
+  ui.focusStart();
 }

@@ -12,9 +12,12 @@ const ICONS: Record<IconName | 'arrow' | 'close', string> = {
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
 };
 
+function extAttrs(href: string) {
+  return href.startsWith('http') ? ' target="_blank" rel="noopener"' : '';
+}
+
 function linkHtml(l: Link) {
-  const external = l.href.startsWith('http');
-  return `<a class="link" href="${l.href}"${external ? ' target="_blank" rel="noopener"' : ''}>${ICONS[l.icon]}<span>${l.label}</span></a>`;
+  return `<a class="link" href="${l.href}"${extAttrs(l.href)}>${ICONS[l.icon]}<span>${l.label}</span></a>`;
 }
 
 export interface CardInfo {
@@ -88,10 +91,22 @@ export class UI {
     });
 
     addEventListener('keydown', (e) => {
+      // Enter starts the ride from the intro, unless a link or other button has focus.
+      if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.isComposing && !this.classicOpen && !document.body.classList.contains('playing')) {
+        const tag = (e.target as HTMLElement | null)?.tagName;
+        if (tag === 'A' || tag === 'BUTTON') return;
+        e.preventDefault();
+        this.handlers.start();
+        return;
+      }
       if (e.key !== 'Escape') return;
       if (this.classicOpen && this.canLeaveClassic) this.hideClassic();
       else if (this.cardOpen) this.handlers.closeCard();
     });
+  }
+
+  focusStart() {
+    this.root.querySelector<HTMLElement>('[data-action="start"]')?.focus();
   }
 
   private template() {
@@ -101,27 +116,34 @@ export class UI {
       : '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows to ride · <kbd>Space</kbd> to hop · or click anywhere';
     return `
       <section class="intro" aria-labelledby="intro-title">
-        <div class="intro-inner">
-          <p class="eyebrow">Hi, I'm</p>
-          <h1 id="intro-title">${profile.name}</h1>
-          <p class="lead">Staff software engineer who loves <strong>AI</strong> and fixing anything with an engine, a hinge or a bug.</p>
-          <p class="sub">Hop on the bike and visit ${stations.length} stops around the valley to get to know me.</p>
-          <div class="intro-actions">
-            <button class="btn primary" data-action="start">Start riding ${ICONS.arrow}</button>
-            <button class="btn ghost" data-action="classic">Just show me the info</button>
+        <div class="intro-inner term">
+          <div class="term-bar" aria-hidden="true"><i></i><i></i><i></i><span>greg@calgary: ~</span></div>
+          <div class="term-body">
+            <p class="cmd">whoami</p>
+            <h1 id="intro-title">${profile.name}</h1>
+            <p class="cmd">cat about.txt</p>
+            <p class="out">${profile.intro.replace('AI', '<strong>AI</strong>')}</p>
+            <p class="cmd">ls ~/contact</p>
+            <div class="term-links">${contactLinks.map(linkHtml).join('')}</div>
+            <p class="cmd">./ride.sh <span class="comment"># ${stations.length} stops, a motorbike, no cars harmed</span></p>
+            <div class="intro-actions">
+              <button class="btn primary" data-action="start">[ play ] ${ICONS.arrow}</button>
+              <button class="btn ghost" data-action="classic">cat everything.md</button>
+            </div>
+            <p class="keys">${keys}</p>
+            <p class="cmd idle"><span class="cursor"></span></p>
           </div>
-          <p class="keys">${keys}</p>
         </div>
       </section>
 
       <header class="hud hud-top">
         <div class="brand">
-          <span class="brand-name">${profile.name}</span>
-          <span class="brand-sub">AI · Software · Fixer of things · ${profile.location.split(',')[0]}</span>
+          <span class="brand-name">~/greg</span>
+          <span class="brand-sub">${profile.headline} · ${profile.location.split(',')[0].toLowerCase()}</span>
         </div>
         <nav class="hud-actions">
-          <button class="chip" data-action="contact">Contact</button>
-          <button class="chip" data-action="classic">Classic view</button>
+          <button class="chip" data-action="contact">contact</button>
+          <button class="chip" data-action="classic">text mode</button>
         </nav>
       </header>
 
@@ -134,7 +156,7 @@ export class UI {
             )
             .join('')}
         </div>
-        <span class="progress-text">0 / ${stations.length} discovered</span>
+        <span class="progress-text">0/${stations.length} found</span>
       </div>
 
       <p class="hud hint">${keys}</p>
@@ -147,34 +169,57 @@ export class UI {
   }
 
   private classicTemplate(year: number) {
+    const ln = (html = '', cls = '') => `<div class="ln${cls ? ` ${cls}` : ''}">${html}</div>`;
+    const short = (href: string) => href.replace(/^(https?:\/\/(www\.)?|mailto:|tel:)/, '').replace(/\/$/, '');
+    const key = (k: string, v: string) => ln(`<span class="k">${k}</span><span class="mk">:</span> ${v}`);
+    const sections = stations.filter((s) => s.id !== 'contact');
+    const contact = stations.find((s) => s.id === 'contact')!;
+    const interests = ['code', 'ai', 'motorcycles', 'cars', 'mtb', 'fixing-things']
+      .map((i) => `<span class="str">${i}</span>`)
+      .join('<span class="mk">, </span>');
     return `
-      <div class="classic-inner">
-        <button class="btn ghost back" data-action="back">← Back to the 3D valley</button>
-        <header class="classic-head">
-          <p class="eyebrow">${profile.location}</p>
-          <h1>${profile.name}</h1>
-          <p class="lead">${profile.headline}</p>
-          <p class="intro-text">${profile.intro}</p>
-          <div class="links">${contactLinks.map(linkHtml).join('')}</div>
-        </header>
-        <div class="grid">
-          ${stations
-            .filter((s) => s.id !== 'contact')
-            .map(
-              (s) => `
-            <article class="tile" style="--c:${s.color}">
-              <p class="tag">${s.tag}</p>
-              <h2>${s.title}</h2>
-              <ul>${s.facts.map((f) => `<li>${f}</li>`).join('')}</ul>
-            </article>`,
-            )
-            .join('')}
-        </div>
-        <footer class="classic-foot">
-          <h2>Let's talk</h2>
-          <div class="links">${contactLinks.map(linkHtml).join('')}</div>
-          <p class="fine">© ${year} ${profile.name} · Calgary, Alberta</p>
-        </footer>
+      <div class="ed-bar">
+        <span class="ed-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="ed-tab">everything.md</span>
+        <button class="ed-quit back" data-action="back"><span class="mk">:</span>q <span class="ed-quit-sub">back to the game</span></button>
+      </div>
+      <article class="buffer">
+        ${ln('---', 'mk')}
+        ${key('name', `<span class="str">${profile.name}</span>`)}
+        ${key('location', `<span class="str">${profile.location}</span>`)}
+        ${key('interests', `<span class="mk">[</span>${interests}<span class="mk">]</span>`)}
+        ${contactLinks.map((l) => key(l.icon === 'mail' ? 'email' : l.icon, `<a href="${l.href}"${extAttrs(l.href)}>${l.href.startsWith('http') ? short(l.href) : l.label}</a>`)).join('')}
+        ${ln('---', 'mk')}
+        ${ln()}
+        <h1 class="ln md-h1"><span class="mk"># </span>${profile.name}</h1>
+        ${ln()}
+        <p class="ln">${profile.intro}</p>
+        ${sections
+          .map(
+            (s) => `
+          ${ln()}
+          <h2 class="ln md-h2" style="--c:${s.color}"><span class="mk">## </span>${s.title}</h2>
+          ${ln(`&lt;!-- ${s.tag.toLowerCase()} --&gt;`, 'cm')}
+          <p class="ln">${s.text}</p>`,
+          )
+          .join('')}
+        ${ln()}
+        <h2 class="ln md-h2" style="--c:${contact.color}"><span class="mk">## </span>${contact.title}</h2>
+        ${ln()}
+        <p class="ln">${contact.text}</p>
+        ${ln()}
+        ${contactLinks
+          .map((l) => ln(`<span class="mk">- [</span><a href="${l.href}"${extAttrs(l.href)}>${l.label}</a><span class="mk">](</span><span class="url">${short(l.href)}</span><span class="mk">)</span>`))
+          .join('')}
+        ${ln()}
+        ${ln(`&lt;!-- © ${year} ${profile.name} · made with three.js and too much coffee --&gt;`, 'cm')}
+        ${ln('<span class="cursor"></span>')}
+        <div class="tildes" aria-hidden="true">~<br />~<br />~</div>
+      </article>
+      <div class="ed-status" aria-hidden="true">
+        <span class="mode">NORMAL</span>
+        <span>everything.md</span>
+        <span class="ed-status-r">markdown · utf-8 · ${sections.length + 1} sections</span>
       </div>`;
   }
 
@@ -188,13 +233,13 @@ export class UI {
     this.card.style.setProperty('--c', s.color);
     this.card.innerHTML = `
       <button class="card-close" data-action="close-card" aria-label="Close">${ICONS.close}</button>
-      <p class="tag"><span class="tag-dot"></span>${s.tag} <span class="tag-count">${index + 1} / ${stations.length}</span></p>
+      <p class="tag"><span class="tag-dot"></span>// ${s.tag} <span class="tag-count">[${index + 1}/${stations.length}]</span></p>
       <h2 id="card-title">${s.title}</h2>
-      <ul class="facts">${s.facts.map((f) => `<li>${f}</li>`).join('')}</ul>
+      <p class="blurb">${s.text}</p>
       ${s.links ? `<div class="links">${s.links.map(linkHtml).join('')}</div>` : ''}
       ${
         info.next
-          ? `<button class="next" data-action="travel" data-index="${info.next.index}">Next stop: ${info.next.label} ${ICONS.arrow}</button>`
+          ? `<button class="next" data-action="travel" data-index="${info.next.index}">next: ${info.next.label} ${ICONS.arrow}</button>`
           : ''
       }`;
     this.card.setAttribute('aria-hidden', 'false');
@@ -213,7 +258,7 @@ export class UI {
   setProgress(discovered: boolean[]) {
     const n = discovered.filter(Boolean).length;
     discovered.forEach((d, i) => this.dots[i].classList.toggle('done', d));
-    this.progressText.textContent = n === stations.length ? 'All stops discovered!' : `${n} / ${stations.length} discovered`;
+    this.progressText.textContent = n === stations.length ? '100% complete' : `${n}/${stations.length} found`;
   }
 
   hideHint() {
@@ -224,7 +269,7 @@ export class UI {
     this.canLeaveClassic = canLeave;
     this.classic.hidden = false;
     this.classic.querySelector<HTMLElement>('.back')!.hidden = !canLeave;
-    this.classic.scrollTop = 0;
+    this.classic.querySelector('.buffer')!.scrollTop = 0;
     this.classicOpen = true;
     this.handlers.classicChanged(true);
   }
