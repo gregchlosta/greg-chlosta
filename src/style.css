@@ -83,6 +83,19 @@ a {
   pointer-events: auto;
 }
 
+/* Soft vignette that pulls the eye to the middle of the valley. */
+#ui::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(24, 10, 34, 0.38) 100%);
+  pointer-events: none;
+}
+
+.no-webgl #ui::before {
+  display: none;
+}
+
 /* ---------- Floating labels in the world ---------- */
 .world-label {
   pointer-events: auto;

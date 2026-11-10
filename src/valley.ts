@@ -1,4 +1,9 @@
 import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { stations, type Station } from './content';
 import { Particles } from './effects';
@@ -20,6 +25,8 @@ interface StationRT {
   discovered: boolean;
 }
 
+const BEAM_OPACITY = 0.42;
+const INTRO_ANGLE = innerWidth < innerHeight ? 1.9 : 2.25;
 const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
 function beamMaterial(color: THREE.Color) {
@@ -28,7 +35,7 @@ function beamMaterial(color: THREE.Color) {
     depthWrite: false,
     side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending,
-    uniforms: { color: { value: color }, opacity: { value: 0.55 }, time: { value: 0 } },
+    uniforms: { color: { value: color }, opacity: { value: BEAM_OPACITY }, time: { value: 0 } },
     vertexShader: /* glsl */ `
       varying float vY;
       void main() {
@@ -39,7 +46,7 @@ function beamMaterial(color: THREE.Color) {
       uniform vec3 color; uniform float opacity; uniform float time;
       varying float vY;
       void main() {
-        float fade = pow(1.0 - vY, 2.2);
+        float fade = pow(clamp(1.0 - vY, 0.0, 1.0), 2.2);
         float shimmer = 0.75 + 0.25 * sin(time * 2.4 - vY * 9.0);
         gl_FragColor = vec4(color, fade * opacity * shimmer);
         #include <colorspace_fragment>
@@ -51,9 +58,10 @@ export function startValley(ui: UI) {
   const app = document.getElementById('app')!;
   const canvas = document.getElementById('scene') as HTMLCanvasElement;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  let pixelRatio = Math.min(devicePixelRatio, matchMedia('(pointer: coarse)').matches ? 1.5 : 2);
+  renderer.setPixelRatio(pixelRatio);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
 
@@ -66,6 +74,36 @@ export function startValley(ui: UI) {
   const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 1400);
   const world = createWorld(scene);
   const colliders: Collider[] = [...world.colliders];
+
+  // Bloom on anything brighter than white: the sun, beacons, flames, fireflies. The scene is
+  // rendered in HDR and tone-mapped once at the end, so only real highlights spill over.
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.42, 0.7, 1.0);
+  let composer: EffectComposer | null = new EffectComposer(
+    renderer,
+    new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }),
+  );
+  composer.addPass(new RenderPass(scene, camera));
+  // Glints off chrome and glass can overflow a half-float buffer; one such pixel would be
+  // smeared across the whole frame by the blur, so cap highlights before they reach it.
+  composer.addPass(
+    new ShaderPass({
+      uniforms: { tDiffuse: { value: null } },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D tDiffuse;
+        varying vec2 vUv;
+        void main() {
+          gl_FragColor = vec4(clamp(texture2D(tDiffuse, vUv).rgb, 0.0, 24.0), 1.0);
+        }`,
+    }),
+  );
+  composer.addPass(bloom);
+  composer.addPass(new OutputPass());
 
   scene.add(new THREE.HemisphereLight('#ffe2c4', '#4a5a34', 1.15));
   const sun = new THREE.DirectionalLight('#ffd3a1', 2.8);
@@ -91,7 +129,7 @@ export function startValley(ui: UI) {
     );
     padMesh.position.copy(pad).setY(0.07);
     padMesh.receiveShadow = true;
-    const ringMat = new THREE.MeshBasicMaterial({ color, transparent: true, toneMapped: false });
+    const ringMat = new THREE.MeshBasicMaterial({ color: color.clone().multiplyScalar(1.25), transparent: true, toneMapped: false });
     const ring = new THREE.Mesh(new THREE.RingGeometry(1.65, 1.95, 48), ringMat);
     ring.rotation.x = -Math.PI / 2;
     ring.position.copy(pad).setY(0.15);
@@ -111,7 +149,7 @@ export function startValley(ui: UI) {
 
     const marker = new THREE.Mesh(
       new THREE.OctahedronGeometry(0.3),
-      new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.5, flatShading: true }),
+      new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.9, flatShading: true }),
     );
     marker.position.copy(pad).setY(3.1);
     scene.add(marker);
@@ -140,6 +178,10 @@ export function startValley(ui: UI) {
   // --- Player --------------------------------------------------------------------
   const bike = buildMotorbike({ body: '#f97316', accent: '#1e293b', rider: true });
   scene.add(bike.root);
+  const headlight = new THREE.SpotLight('#ffe6b0', 10, 24, 0.5, 0.8, 0.9);
+  headlight.position.set(0, 1.25, 0.7);
+  headlight.target.position.set(0, 0, 9);
+  bike.lean.add(headlight, headlight.target);
   const rider = new Rider(new THREE.Vector3(0, 0, 3.2), 0);
   const input = new Input();
   const particles = new Particles(scene);
@@ -305,16 +347,20 @@ export function startValley(ui: UI) {
     }
   }
 
-  const camPos = new THREE.Vector3(30, 16, 30);
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let baseFov = 55;
+  let fovKick = 0;
+  const camPos = new THREE.Vector3(Math.sin(INTRO_ANGLE) * 36, 11, Math.cos(INTRO_ANGLE) * 36);
   const camLook = new THREE.Vector3();
   const wantPos = new THREE.Vector3();
   const wantLook = new THREE.Vector3();
   function updateCamera(dt: number, t: number) {
     let k = 1.5;
     if (state === 'intro') {
-      const a = t * 0.06 + 0.5;
-      wantPos.set(Math.sin(a) * 33, 15, Math.cos(a) * 33);
-      wantLook.set(0, 1, 0);
+      // Slow orbit that opens with the sunset on the right, clear of the intro card.
+      const a = INTRO_ANGLE - t * 0.035;
+      wantPos.set(Math.sin(a) * 33, 10, Math.cos(a) * 33);
+      wantLook.set(0, 3, 0);
     } else {
       const portrait = camera.aspect < 0.8;
       const back = portrait ? 12.5 : 8.8;
@@ -324,14 +370,22 @@ export function startValley(ui: UI) {
       wantPos.set(rider.pos.x - fx * back, up + rider.y * 0.4, rider.pos.z - fz * back);
       const r = Math.hypot(wantPos.x, wantPos.z);
       if (r > 29) wantPos.multiplyScalar(29 / r).setY(up);
-      wantLook.set(rider.pos.x + fx * 2.5, 1 + rider.y * 0.5, rider.pos.z + fz * 2.5);
+      // Landscape screens look further up the trail, which lifts the horizon into frame.
+      const ahead = portrait ? 2.5 : 5;
+      wantLook.set(rider.pos.x + fx * ahead, (portrait ? 1 : 1.8) + rider.y * 0.5, rider.pos.z + fz * ahead);
       k = 3;
     }
     const f = 1 - Math.exp(-k * dt);
     camPos.lerp(wantPos, f);
     camLook.lerp(wantLook, Math.min(1, f * 1.6));
     camera.position.copy(camPos);
+    // A small thump when the bike lands, and the view opens up a little at speed.
+    if (!reducedMotion) camera.position.y -= Math.sin(rider.landing * Math.PI) * rider.landing * 0.22;
     camera.lookAt(camLook);
+    const speedFov = reducedMotion || state === 'intro' ? 0 : clamp(rider.speed / rider.maxSpeed, 0, 1) * 7;
+    fovKick += (speedFov - fovKick) * Math.min(1, dt * 2.5);
+    camera.fov = baseFov + fovKick;
+    camera.updateProjectionMatrix();
   }
 
   const rearWheel = new THREE.Vector3();
@@ -364,7 +418,7 @@ export function startValley(ui: UI) {
       st.marker.rotation.y = t * 1.6;
       st.marker.position.y = 3.1 + Math.sin(t * 2 + st.pad.x) * 0.15;
       st.beam.uniforms.time.value = t;
-      const targetOpacity = st.discovered ? 0 : 0.55;
+      const targetOpacity = st.discovered ? 0 : BEAM_OPACITY;
       st.beam.uniforms.opacity.value += (targetOpacity - st.beam.uniforms.opacity.value) * Math.min(1, dt * 2);
       st.ringMat.opacity = st.discovered ? 0.45 : 0.65 + Math.sin(t * 3) * 0.3;
       const d = camera.position.distanceTo(st.pad);
@@ -378,11 +432,34 @@ export function startValley(ui: UI) {
   function resize() {
     const w = innerWidth;
     const h = innerHeight;
+    renderer.setPixelRatio(pixelRatio);
     renderer.setSize(w, h, false);
+    composer?.setPixelRatio(pixelRatio);
+    composer?.setSize(w, h);
     labels.setSize(w, h);
+    world.setViewportHeight(h * pixelRatio);
     camera.aspect = w / h;
-    camera.fov = camera.aspect < 0.8 ? 62 : 55;
+    baseFov = camera.aspect < 0.8 ? 62 : 55;
+    camera.fov = baseFov + fovKick;
     camera.updateProjectionMatrix();
+  }
+
+  // Slow device? Trade resolution first, then the bloom, rather than drop frames.
+  let slowTime = 0;
+  let sampleFrames = 0;
+  function watchFrameRate(rawDt: number) {
+    if (rawDt > 0.25) return; // tab was in the background
+    slowTime += rawDt;
+    if (++sampleFrames < 90) return;
+    const fps = sampleFrames / slowTime;
+    slowTime = sampleFrames = 0;
+    if (fps > 42) return;
+    if (pixelRatio > 1) pixelRatio = Math.max(1, pixelRatio - 0.5);
+    else if (composer) {
+      composer.dispose();
+      composer = null;
+    } else return;
+    resize();
   }
   addEventListener('resize', resize);
   resize();
@@ -391,12 +468,15 @@ export function startValley(ui: UI) {
   let elapsed = 0;
   renderer.setAnimationLoop(() => {
     const now = performance.now();
-    const dt = Math.min((now - last) / 1000, 0.05);
+    const rawDt = (now - last) / 1000;
+    const dt = Math.min(rawDt, 0.05);
     last = now;
     if (ui.classicOpen) return;
+    if (document.visibilityState === 'visible') watchFrameRate(rawDt);
     elapsed += dt;
     step(dt, elapsed);
-    renderer.render(scene, camera);
+    if (composer) composer.render(dt);
+    else renderer.render(scene, camera);
     labels.render(scene, camera);
   });
   document.body.classList.add('ready');

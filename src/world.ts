@@ -46,7 +46,12 @@ export function createWorld(scene: THREE.Scene) {
   const rand = rng(7);
   const updaters: ((t: number) => void)[] = [];
 
-  // --- Sky -------------------------------------------------------------------
+  // --- Sky: dusk gradient, a sun low in the west, first stars overhead ----------
+  // The sun sets through a pass in the Rockies; everything that glows takes its cue from here.
+  const sunDir = new THREE.Vector3(-1, 0.13, 0.15).normalize();
+  const sunColor = new THREE.Color('#ffb066');
+  const time = { value: 0 };
+  updaters.push((t) => (time.value = t));
   const sky = new THREE.Mesh(
     new THREE.SphereGeometry(600, 32, 16),
     new THREE.ShaderMaterial({
@@ -54,9 +59,12 @@ export function createWorld(scene: THREE.Scene) {
       depthWrite: false,
       fog: false,
       uniforms: {
-        top: { value: new THREE.Color('#25305f') },
+        top: { value: new THREE.Color('#1d2757') },
         mid: { value: new THREE.Color('#e7896b') },
         bottom: { value: new THREE.Color('#f9c98f') },
+        sunDir: { value: sunDir },
+        sunColor: { value: sunColor },
+        time,
       },
       vertexShader: /* glsl */ `
         varying vec3 vDir;
@@ -66,11 +74,31 @@ export function createWorld(scene: THREE.Scene) {
         }`,
       fragmentShader: /* glsl */ `
         uniform vec3 top; uniform vec3 mid; uniform vec3 bottom;
+        uniform vec3 sunDir; uniform vec3 sunColor; uniform float time;
         varying vec3 vDir;
+        float hash(vec3 p) {
+          p = fract(p * 0.3183099 + 0.1);
+          p *= 17.0;
+          return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+        }
         void main() {
-          float h = vDir.y;
+          vec3 d = normalize(vDir);
+          float h = d.y;
           vec3 c = mix(bottom, mid, smoothstep(-0.02, 0.14, h));
-          c = mix(c, top, smoothstep(0.14, 0.65, h));
+          c = mix(c, top, smoothstep(0.14, 0.62, h));
+
+          // Warm scatter around the sun, a tight corona, then the disc itself (HDR so it blooms).
+          float s = max(dot(d, sunDir), 0.0);
+          c += sunColor * (0.3 * pow(s, 5.0) + 0.55 * pow(s, 48.0));
+          c = mix(c, vec3(4.6, 3.5, 2.0), smoothstep(0.99885, 0.9992, s));
+
+          // Stars fade in where the sky has gone dark.
+          vec3 cell = d * 190.0;
+          float n = hash(floor(cell));
+          float star = step(0.9965, n) * (1.0 - smoothstep(0.0, 0.42, length(fract(cell) - 0.5)));
+          star *= smoothstep(0.16, 0.5, h) * (0.55 + 0.45 * sin(time * 1.7 + n * 400.0));
+          c += vec3(1.0, 0.95, 0.85) * star * 1.6;
+
           gl_FragColor = vec4(c, 1.0);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
@@ -78,22 +106,6 @@ export function createWorld(scene: THREE.Scene) {
     }),
   );
   scene.add(sky);
-
-  // Setting sun in the west, behind the Rockies.
-  const sunDir = new THREE.Vector3(-1, 0.13, 0.15).normalize();
-  const sun = new THREE.Mesh(
-    new THREE.CircleGeometry(22, 40),
-    new THREE.MeshBasicMaterial({ color: '#fff3d1', fog: false, toneMapped: false }),
-  );
-  sun.position.copy(sunDir).multiplyScalar(480);
-  sun.lookAt(0, 0, 0);
-  const halo = new THREE.Mesh(
-    new THREE.CircleGeometry(60, 40),
-    new THREE.MeshBasicMaterial({ color: '#ffd59a', fog: false, transparent: true, opacity: 0.28, depthWrite: false }),
-  );
-  halo.position.copy(sunDir).multiplyScalar(485);
-  halo.lookAt(0, 0, 0);
-  scene.add(sun, halo);
 
   // --- Terrain ---------------------------------------------------------------
   let ground: THREE.BufferGeometry = new THREE.PlaneGeometry(460, 460, 115, 115);
@@ -247,35 +259,118 @@ export function createWorld(scene: THREE.Scene) {
   scene.add(tufts);
 
   // --- The Rockies to the west, foothills all around ---------------------------
-  const rockMat = std('#66708c');
-  const rockMatDark = std('#545d78');
-  const snowMat = std('#f4f1ec', { roughness: 0.7 });
-  const addMountain = (a: number, d: number, h: number, r: number, snow: boolean) => {
+  // One merged mesh with its own shader: scene fog would flatten peaks this far away into
+  // a single brown wall, so they get aerial perspective instead (haze at the foot, alpenglow
+  // on the faces that catch the light, snow up high).
+  const sunAz = Math.atan2(sunDir.z, sunDir.x);
+  const peaks: THREE.BufferGeometry[] = [];
+  const addMountain = (a: number, d: number, h: number, r: number, kind: number) => {
     const x = Math.cos(a) * d;
     const z = Math.sin(a) * d;
-    const seg = 5 + Math.floor(rand() * 3);
     const base = heightAt(x, z) - 3;
-    const mtn = new THREE.Mesh(new THREE.ConeGeometry(r, h, seg), rand() < 0.5 ? rockMat : rockMatDark);
-    mtn.position.set(x, base + h / 2, z);
-    mtn.rotation.y = rand() * Math.PI;
-    scene.add(mtn);
-    if (snow) {
-      const k = 0.3 + rand() * 0.08;
-      const cap = new THREE.Mesh(new THREE.ConeGeometry(r * k * 1.03, h * k, seg), snowMat);
-      cap.position.set(x, base + h - (h * k) / 2 + 0.05, z);
-      cap.rotation.y = mtn.rotation.y;
-      scene.add(cap);
+    const g = new THREE.ConeGeometry(r, h, 11, 5, true);
+    const mp = g.attributes.position;
+    const p1 = rand() * 6.28;
+    const p2 = rand() * 6.28;
+    const p3 = rand() * 6.28;
+    const leanX = (rand() - 0.5) * r * 0.4;
+    const leanZ = (rand() - 0.5) * r * 0.4;
+    const aT = new Float32Array(mp.count);
+    const aKind = new Float32Array(mp.count).fill(kind);
+    for (let i = 0; i < mp.count; i++) {
+      const px = mp.getX(i);
+      const pz = mp.getZ(i);
+      const t = mp.getY(i) / h + 0.5;
+      // Periodic in the angle so the seam stays closed; gives each peak ridges and gullies.
+      const th = Math.atan2(pz, px);
+      const k = 1 + Math.sin(th * 3 + p1) * 0.2 + Math.sin(th * 5 + p2) * 0.11 + Math.sin(th * 2 + t * 5 + p3) * 0.1;
+      mp.setXYZ(i, x + px * k + leanX * t * t, base + t * h, z + pz * k + leanZ * t * t);
+      aT[i] = t;
     }
+    g.deleteAttribute('normal');
+    g.deleteAttribute('uv');
+    g.setAttribute('aT', new THREE.BufferAttribute(aT, 1));
+    g.setAttribute('aKind', new THREE.BufferAttribute(aKind, 1));
+    // Un-indexed so every facet gets its own normal: hard low-poly faces.
+    const flat = g.toNonIndexed();
+    flat.computeVertexNormals();
+    peaks.push(flat);
   };
   for (let i = 0; i < 30; i++) {
-    addMountain(Math.PI + (rand() - 0.5) * 2.4, 125 + rand() * 80, 45 + rand() * 50, 22 + rand() * 22, true);
+    const off = (rand() - 0.5) * 2.4;
+    // Leave a pass where the sun goes down: peaks near it sit further back and lower.
+    const open = smooth(0.12, 0.6, Math.abs(off));
+    const d = Math.abs(off) < 0.5 ? 215 + rand() * 40 : 150 + rand() * 80;
+    addMountain(sunAz + off, d, (18 + rand() * 24) * (0.3 + 0.7 * open), 22 + rand() * 22, 1);
   }
   for (let i = 0; i < 18; i++) {
-    addMountain(rand() * Math.PI * 2, 150 + rand() * 60, 14 + rand() * 16, 24 + rand() * 18, false);
+    addMountain(rand() * Math.PI * 2, 150 + rand() * 60, 14 + rand() * 16, 24 + rand() * 18, 0);
   }
+  const mountains = new THREE.Mesh(
+    mergeGeometries(peaks),
+    new THREE.ShaderMaterial({
+      uniforms: {
+        sunDir: { value: sunDir },
+        sunColor: { value: sunColor },
+        haze: { value: new THREE.Color(FOG_COLOR) },
+        rockLit: { value: new THREE.Color('#d98576') },
+        rockShade: { value: new THREE.Color('#444677') },
+        hillLit: { value: new THREE.Color('#9a9a5c') },
+        hillShade: { value: new THREE.Color('#3c5458') },
+        snowLit: { value: new THREE.Color('#ffe3d2') },
+        snowShade: { value: new THREE.Color('#9499d6') },
+      },
+      vertexShader: /* glsl */ `
+        attribute float aT; attribute float aKind;
+        varying vec3 vW; varying vec3 vN; varying float vT; varying float vKind;
+        void main() {
+          vec4 w = modelMatrix * vec4(position, 1.0);
+          vW = w.xyz; vN = normal; vT = aT; vKind = aKind;
+          gl_Position = projectionMatrix * viewMatrix * w;
+        }`,
+      fragmentShader: /* glsl */ `
+        uniform vec3 sunDir; uniform vec3 sunColor; uniform vec3 haze;
+        uniform vec3 rockLit; uniform vec3 rockShade; uniform vec3 hillLit; uniform vec3 hillShade;
+        uniform vec3 snowLit; uniform vec3 snowShade;
+        varying vec3 vW; varying vec3 vN; varying float vT; varying float vKind;
+        void main() {
+          vec3 n = normalize(vN + vec3(0.0, 1e-4, 0.0));
+          float lit = smoothstep(-0.2, 0.7, dot(n, normalize(vec3(-0.3, 0.55, 0.78))));
+          vec3 c = mix(mix(hillShade, hillLit, lit), mix(rockShade, rockLit, lit), vKind);
+          float line = vT + sin(vW.x * 0.21 + vW.y * 0.3) * 0.05 + sin(vW.z * 0.17) * 0.04;
+          c = mix(c, mix(snowShade, snowLit, lit), vKind * smoothstep(0.5, 0.56, line));
 
-  // --- A tiny Calgary skyline on the eastern horizon ---------------------------
-  const cityMat = std('#4b5372');
+          float dist = length(vW.xz - cameraPosition.xz);
+          float hz = smoothstep(90.0, 340.0, dist) * 0.45 + (1.0 - smoothstep(2.0, 50.0, vW.y)) * 0.6;
+          c = mix(c, haze, clamp(hz, 0.0, 0.92));
+          vec3 v = normalize(vW - cameraPosition);
+          c += sunColor * pow(max(dot(v, sunDir), 0.0), 9.0) * 0.45;
+
+          gl_FragColor = vec4(c, 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }`,
+    }),
+  );
+  scene.add(mountains);
+
+  // --- A tiny Calgary skyline on the eastern horizon, lights coming on ------------
+  const windows = document.createElement('canvas');
+  windows.width = 16;
+  windows.height = 64;
+  const wctx = windows.getContext('2d')!;
+  wctx.fillStyle = '#000';
+  wctx.fillRect(0, 0, 16, 64);
+  for (let y = 2; y < 62; y += 3)
+    for (let x = 1; x < 15; x += 3) {
+      if (rand() < 0.45) continue;
+      wctx.fillStyle = rand() < 0.8 ? '#ffd9a0' : '#bfe3ff';
+      wctx.fillRect(x, y, 2, 1);
+    }
+  const windowTex = new THREE.CanvasTexture(windows);
+  windowTex.colorSpace = THREE.SRGBColorSpace;
+  windowTex.magFilter = THREE.NearestFilter;
+  const cityMat = std('#3f4670', { emissive: '#ffffff', emissiveMap: windowTex, emissiveIntensity: 2.2 });
   for (let i = 0; i < 18; i++) {
     const a = (rand() - 0.5) * 0.32;
     const d = 140 + rand() * 12;
@@ -287,14 +382,99 @@ export function createWorld(scene: THREE.Scene) {
   }
   const tower = new THREE.Group();
   const tx = 138;
-  tower.add(new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1.3, 34, 8).translate(0, 17, 0), cityMat));
-  tower.add(new THREE.Mesh(new THREE.CylinderGeometry(3, 2.3, 2.6, 12).translate(0, 34.5, 0), cityMat));
+  const towerMat = std('#3f4670');
+  tower.add(new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1.3, 34, 8).translate(0, 17, 0), towerMat));
+  tower.add(new THREE.Mesh(new THREE.CylinderGeometry(3, 2.3, 2.6, 12).translate(0, 34.5, 0), std('#b5333f', { emissive: '#ff5a4a', emissiveIntensity: 0.6 })));
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.7, 8, 6), new THREE.MeshBasicMaterial({ color: '#ff3b30', fog: false }));
+  beacon.position.y = 37.5;
+  tower.add(beacon);
   tower.position.set(tx, heightAt(tx, 6) - 1, 6);
   scene.add(tower);
+  updaters.push((t) => (beacon.material.color.setRGB(1, 0.23, 0.19).multiplyScalar(Math.sin(t * 2.2) > 0.2 ? 5 : 0.4)));
+
+  // --- Fireflies over the meadow ----------------------------------------------
+  const flyCount = 150;
+  const flyPos = new Float32Array(flyCount * 3);
+  const flySeed = new Float32Array(flyCount);
+  for (let i = 0; i < flyCount; i++) {
+    const r = 4 + Math.pow(rand(), 0.7) * 44;
+    const a = rand() * Math.PI * 2;
+    const fx = Math.sin(a) * r;
+    const fz = Math.cos(a) * r;
+    flyPos.set([fx, heightAt(fx, fz) + 0.5 + rand() * 2.6, fz], i * 3);
+    flySeed[i] = rand() * 100;
+  }
+  const flyGeo = new THREE.BufferGeometry();
+  flyGeo.setAttribute('position', new THREE.BufferAttribute(flyPos, 3));
+  flyGeo.setAttribute('seed', new THREE.BufferAttribute(flySeed, 1));
+  const pointScale = { value: 400 };
+  const fireflies = new THREE.Points(
+    flyGeo,
+    new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      uniforms: { time, pointScale },
+      vertexShader: /* glsl */ `
+        attribute float seed;
+        uniform float time; uniform float pointScale;
+        varying float vGlow;
+        void main() {
+          vec3 p = position;
+          p.x += sin(time * 0.45 + seed) * 1.1 + sin(time * 1.3 + seed * 3.0) * 0.25;
+          p.y += sin(time * 0.8 + seed * 2.0) * 0.4;
+          p.z += cos(time * 0.38 + seed * 1.7) * 1.1;
+          vGlow = smoothstep(0.1, 0.9, sin(time * 1.4 + seed * 5.0) * 0.5 + 0.5);
+          vec4 mv = modelViewMatrix * vec4(p, 1.0);
+          gl_PointSize = pointScale * (0.1 + 0.08 * vGlow) / -mv.z;
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: /* glsl */ `
+        varying float vGlow;
+        void main() {
+          float d = length(gl_PointCoord - 0.5);
+          float core = 1.0 - smoothstep(0.0, 0.5, d);
+          gl_FragColor = vec4(vec3(1.0, 0.8, 0.3) * (0.5 + 1.5 * vGlow), core * core * (0.25 + 0.75 * vGlow));
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }`,
+    }),
+  );
+  fireflies.frustumCulled = false;
+  scene.add(fireflies);
+
+  // --- A few birds wheeling in front of the sunset -----------------------------
+  const flock = new THREE.Group();
+  const wingGeo = new THREE.BufferGeometry();
+  wingGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, 0, 0.35, 0, 0, -0.35, 1.5, 0, -0.1]), 3));
+  const birdMat = new THREE.MeshBasicMaterial({ color: '#2a2440', side: THREE.DoubleSide, fog: false });
+  const birds = Array.from({ length: 7 }, (_, i) => {
+    const bird = new THREE.Group();
+    const wings = [1, -1].map((side) => {
+      const w = new THREE.Mesh(wingGeo, birdMat);
+      w.scale.x = side;
+      bird.add(w);
+      return w;
+    });
+    // Loose V formation, flying along the tangent of the flock's circle.
+    const row = Math.ceil(i / 2);
+    bird.position.set(78 + row * 2.4 * (i % 2 ? 1 : -1), 19 + rand() * 3, -row * 3.2);
+    flock.add(bird);
+    return { wings, phase: rand() * 6 };
+  });
+  scene.add(flock);
+  updaters.push((t) => {
+    flock.rotation.y = -sunAz + Math.sin(t * 0.05) * 1.1;
+    for (const b of birds) {
+      const flap = Math.sin(t * 5.5 + b.phase) * 0.55;
+      b.wings[0].rotation.z = flap;
+      b.wings[1].rotation.z = -flap;
+    }
+  });
 
   // --- Drifting low-poly clouds ---------------------------------------------
   const clouds = new THREE.Group();
-  const cloudMat = new THREE.MeshStandardMaterial({ color: '#ffe3cf', emissive: '#d98a76', emissiveIntensity: 0.35, flatShading: true, fog: false });
+  const cloudMat = new THREE.MeshStandardMaterial({ color: '#ffe9dc', emissive: '#f08f78', emissiveIntensity: 0.6, flatShading: true, fog: false });
   for (let i = 0; i < 11; i++) {
     const cloud = new THREE.Group();
     const puffs = 3 + Math.floor(rand() * 3);
@@ -356,6 +536,10 @@ export function createWorld(scene: THREE.Scene) {
 
   return {
     colliders: [{ ...FIRE, r: 1.0 }] as Collider[],
+    /** Keeps point sprites the same apparent size at any canvas resolution. */
+    setViewportHeight(px: number) {
+      pointScale.value = px;
+    },
     update(t: number) {
       for (const u of updaters) u(t);
     },
