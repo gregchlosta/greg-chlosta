@@ -19,8 +19,10 @@ interface StationRT {
   prop: Prop;
   ringMat: THREE.MeshBasicMaterial;
   beam: THREE.ShaderMaterial;
+  beamMesh: THREE.Mesh;
   marker: THREE.Mesh;
   label: HTMLElement;
+  lastOpacity: string;
   hit: THREE.Mesh;
   discovered: boolean;
 }
@@ -117,24 +119,28 @@ export function startValley(ui: UI) {
 
   // --- Stations ----------------------------------------------------------------
   const contactIndex = stations.findIndex((s) => s.id === 'contact');
+  const padGeo = new THREE.CylinderGeometry(2.1, 2.25, 0.14, 40);
+  const padMat = new THREE.MeshStandardMaterial({ color: '#3a3530', roughness: 0.95, flatShading: true });
+  const ringGeo = new THREE.RingGeometry(1.65, 1.95, 48);
+  const beamGeo = new THREE.CylinderGeometry(1.85, 1.85, 7, 40, 1, true);
+  const markerGeo = new THREE.OctahedronGeometry(0.3);
+  const hitGeo = new THREE.CylinderGeometry(3.2, 3.2, 5, 12);
+  const hitMat = new THREE.MeshBasicMaterial({ visible: false });
   const rts: StationRT[] = stations.map((data, i) => {
     const angle = (i / stations.length) * Math.PI * 2;
     const dir = new THREE.Vector3(Math.sin(angle), 0, Math.cos(angle));
     const pad = dir.clone().multiplyScalar(RING_RADIUS);
     const color = new THREE.Color(data.color);
 
-    const padMesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(2.1, 2.25, 0.14, 40),
-      new THREE.MeshStandardMaterial({ color: '#3a3530', roughness: 0.95, flatShading: true }),
-    );
+    const padMesh = new THREE.Mesh(padGeo, padMat);
     padMesh.position.copy(pad).setY(0.07);
     padMesh.receiveShadow = true;
     const ringMat = new THREE.MeshBasicMaterial({ color: color.clone().multiplyScalar(1.25), transparent: true, toneMapped: false });
-    const ring = new THREE.Mesh(new THREE.RingGeometry(1.65, 1.95, 48), ringMat);
+    const ring = new THREE.Mesh(ringGeo, ringMat);
     ring.rotation.x = -Math.PI / 2;
     ring.position.copy(pad).setY(0.15);
     const beam = beamMaterial(color);
-    const beamMesh = new THREE.Mesh(new THREE.CylinderGeometry(1.85, 1.85, 7, 40, 1, true), beam);
+    const beamMesh = new THREE.Mesh(beamGeo, beam);
     beamMesh.position.copy(pad).setY(3.5);
     scene.add(padMesh, ring, beamMesh);
 
@@ -148,13 +154,14 @@ export function startValley(ui: UI) {
     }
 
     const marker = new THREE.Mesh(
-      new THREE.OctahedronGeometry(0.3),
+      markerGeo,
       new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.9, flatShading: true }),
     );
     marker.position.copy(pad).setY(3.1);
     scene.add(marker);
 
     const label = document.createElement('button');
+    label.type = 'button';
     label.className = 'world-label';
     label.style.setProperty('--c', data.color);
     label.innerHTML = `<span class="wl-dot"></span>${data.label}`;
@@ -166,12 +173,12 @@ export function startValley(ui: UI) {
     labelObj.position.copy(pad).setY(3.9);
     scene.add(labelObj);
 
-    const hit = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 3.2, 5, 12), new THREE.MeshBasicMaterial({ visible: false }));
+    const hit = new THREE.Mesh(hitGeo, hitMat);
     hit.position.copy(dir).multiplyScalar(RING_RADIUS + 2).setY(2.5);
     hit.userData.index = i;
     scene.add(hit);
 
-    return { data, pad, prop, ringMat, beam, marker, label, hit, discovered: false };
+    return { data, pad, prop, ringMat, beam, beamMesh, marker, label, lastOpacity: '', hit, discovered: false };
   });
   const hitMeshes = rts.map((r) => r.hit);
 
@@ -384,11 +391,15 @@ export function startValley(ui: UI) {
     camera.lookAt(camLook);
     const speedFov = reducedMotion || state === 'intro' ? 0 : clamp(rider.speed / rider.maxSpeed, 0, 1) * 7;
     fovKick += (speedFov - fovKick) * Math.min(1, dt * 2.5);
-    camera.fov = baseFov + fovKick;
-    camera.updateProjectionMatrix();
+    const nextFov = baseFov + fovKick;
+    if (Math.abs(nextFov - camera.fov) > 1e-4) {
+      camera.fov = nextFov;
+      camera.updateProjectionMatrix();
+    }
   }
 
   const rearWheel = new THREE.Vector3();
+  const landingPos = new THREE.Vector3();
   function step(dt: number, t: number) {
     const drive = state === 'play' && !ui.classicOpen ? readDrive(dt) : { throttle: 0, steer: 0, jump: false };
     rider.update(dt, drive, colliders, PLAY_RADIUS);
@@ -410,19 +421,31 @@ export function startValley(ui: UI) {
         particles.emit(rearWheel, '#d9bf98', 1, { speed: 0.8, up: 1.2, gravity: -0.6, life: 0.8, size: 0.13, drag: 1.5 });
       }
     }
-    if (rider.landing > 0.95) particles.emit(rider.pos.clone().setY(0.1), '#d9bf98', 14, { speed: 3, up: 1.5, gravity: 2, life: 0.6, size: 0.14, drag: 2 });
+    if (rider.landing > 0.95) {
+      landingPos.set(rider.pos.x, 0.1, rider.pos.z);
+      particles.emit(landingPos, '#d9bf98', 14, { speed: 3, up: 1.5, gravity: 2, life: 0.6, size: 0.14, drag: 2 });
+    }
 
-    targetRing.scale.setScalar(1 + Math.sin(t * 6) * 0.12);
+    if (targetRing.visible) targetRing.scale.setScalar(1 + Math.sin(t * 6) * 0.12);
     for (const st of rts) {
       st.prop.update?.(t);
       st.marker.rotation.y = t * 1.6;
       st.marker.position.y = 3.1 + Math.sin(t * 2 + st.pad.x) * 0.15;
-      st.beam.uniforms.time.value = t;
-      const targetOpacity = st.discovered ? 0 : BEAM_OPACITY;
-      st.beam.uniforms.opacity.value += (targetOpacity - st.beam.uniforms.opacity.value) * Math.min(1, dt * 2);
+      if (st.beamMesh.visible) {
+        st.beam.uniforms.time.value = t;
+        const targetOpacity = st.discovered ? 0 : BEAM_OPACITY;
+        st.beam.uniforms.opacity.value += (targetOpacity - st.beam.uniforms.opacity.value) * Math.min(1, dt * 2);
+        if (st.discovered && st.beam.uniforms.opacity.value < 0.005) st.beamMesh.visible = false;
+      }
       st.ringMat.opacity = st.discovered ? 0.45 : 0.65 + Math.sin(t * 3) * 0.3;
-      const d = camera.position.distanceTo(st.pad);
-      st.label.style.opacity = String(clamp(1.4 - (d - 14) / 26, 0.4, 1).toFixed(2));
+      if (state === 'play') {
+        const d = camera.position.distanceTo(st.pad);
+        const op = clamp(1.4 - (d - 14) / 26, 0.4, 1).toFixed(2);
+        if (op !== st.lastOpacity) {
+          st.lastOpacity = op;
+          st.label.style.opacity = op;
+        }
+      }
     }
     world.update(t);
     particles.update(dt);
@@ -477,7 +500,7 @@ export function startValley(ui: UI) {
     step(dt, elapsed);
     if (composer) composer.render(dt);
     else renderer.render(scene, camera);
-    labels.render(scene, camera);
+    if (state === 'play') labels.render(scene, camera);
   });
   document.body.classList.add('ready');
   ui.focusStart();

@@ -26,6 +26,7 @@ const HIDDEN = new THREE.Matrix4().makeScale(0, 0, 0);
 export class Particles {
   private readonly mesh: THREE.InstancedMesh;
   private readonly items: Particle[] = [];
+  private active = 0;
   private cursor = 0;
   private readonly m = new THREE.Matrix4();
   private readonly q = new THREE.Quaternion();
@@ -50,6 +51,7 @@ export class Particles {
       const i = this.cursor;
       this.cursor = (this.cursor + 1) % this.items.length;
       const p = this.items[i];
+      if (!p.alive) this.active++;
       const a = Math.random() * Math.PI * 2;
       const r = o.speed * Math.sqrt(Math.random());
       p.alive = true;
@@ -66,12 +68,14 @@ export class Particles {
   }
 
   update(dt: number) {
+    if (this.active === 0) return;
     for (let i = 0; i < this.items.length; i++) {
       const p = this.items[i];
       if (!p.alive) continue;
       p.life += dt;
       if (p.life >= p.max) {
         p.alive = false;
+        this.active--;
         this.mesh.setMatrixAt(i, HIDDEN);
         continue;
       }

@@ -13,7 +13,7 @@ const ICONS: Record<IconName | 'arrow' | 'close', string> = {
 };
 
 function extAttrs(href: string) {
-  return href.startsWith('http') ? ' target="_blank" rel="noopener"' : '';
+  return href.startsWith('http') ? ' target="_blank" rel="noopener noreferrer"' : '';
 }
 
 function linkHtml(l: Link) {
@@ -41,6 +41,7 @@ export class UI {
   classicOpen = false;
   cardOpen = false;
 
+  private readonly intro: HTMLElement;
   private readonly card: HTMLElement;
   private readonly classic: HTMLElement;
   private readonly hint: HTMLElement;
@@ -53,6 +54,7 @@ export class UI {
   constructor(private readonly root: HTMLElement) {
     root.innerHTML = this.template();
     const $ = (sel: string) => root.querySelector(sel) as HTMLElement;
+    this.intro = $('.intro');
     this.card = $('.card');
     this.classic = $('.classic');
     this.hint = $('.hint');
@@ -127,8 +129,8 @@ export class UI {
             <div class="term-links">${contactLinks.map(linkHtml).join('')}</div>
             <p class="cmd">./ride.sh <span class="comment"># ${stations.length} stops, a motorbike, no cars harmed</span></p>
             <div class="intro-actions">
-              <button class="btn primary" data-action="start">[ play ] ${ICONS.arrow}</button>
-              <button class="btn ghost" data-action="classic">cat everything.md</button>
+              <button type="button" class="btn primary" data-action="start">[ play ] ${ICONS.arrow}</button>
+              <button type="button" class="btn ghost" data-action="classic">cat everything.md</button>
             </div>
             <p class="keys">${keys}</p>
             <p class="cmd idle"><span class="cursor"></span></p>
@@ -141,9 +143,9 @@ export class UI {
           <span class="brand-name">~/greg</span>
           <span class="brand-sub">${profile.headline} · ${profile.location.split(',')[0].toLowerCase()}</span>
         </div>
-        <nav class="hud-actions">
-          <button class="chip" data-action="contact">contact</button>
-          <button class="chip" data-action="classic">text mode</button>
+        <nav class="hud-actions" aria-label="Quick actions">
+          <button type="button" class="chip" data-action="contact">contact</button>
+          <button type="button" class="chip" data-action="classic">text mode</button>
         </nav>
       </header>
 
@@ -152,7 +154,7 @@ export class UI {
           ${stations
             .map(
               (s, i) =>
-                `<button class="dot" data-action="travel" data-index="${i}" style="--c:${s.color}" title="Ride to ${s.label}" aria-label="Ride to ${s.label}"></button>`,
+                `<button type="button" class="dot" data-action="travel" data-index="${i}" style="--c:${s.color}" title="Ride to ${s.label}" aria-label="Ride to ${s.label}"></button>`,
             )
             .join('')}
         </div>
@@ -160,11 +162,11 @@ export class UI {
       </div>
 
       <p class="hud hint">${keys}</p>
-      ${touch ? `<button class="hud hop" data-action="hop" aria-label="Hop">Hop</button>` : ''}
+      ${touch ? `<button type="button" class="hud hop" data-action="hop" aria-label="Hop">Hop</button>` : ''}
 
       <aside class="card" role="dialog" aria-modal="false" aria-hidden="true" aria-labelledby="card-title"></aside>
       <div class="toast" role="status" aria-live="polite"></div>
-      <section class="classic" hidden>${this.classicTemplate(year)}</section>
+      <section class="classic" hidden aria-label="Text portfolio view">${this.classicTemplate(year)}</section>
     `;
   }
 
@@ -181,11 +183,12 @@ export class UI {
       <div class="ed-bar">
         <span class="ed-dots" aria-hidden="true"><i></i><i></i><i></i></span>
         <span class="ed-tab">everything.md</span>
-        <button class="ed-quit back" data-action="back"><span class="mk">:</span>q <span class="ed-quit-sub">back to the game</span></button>
+        <button type="button" class="ed-quit back" data-action="back"><span class="mk">:</span>q <span class="ed-quit-sub">back to the game</span></button>
       </div>
       <article class="buffer">
         ${ln('---', 'mk')}
         ${key('name', `<span class="str">${profile.name}</span>`)}
+        ${key('site', `<a href="${profile.site}">${short(profile.site)}</a>`)}
         ${key('location', `<span class="str">${profile.location}</span>`)}
         ${key('interests', `<span class="mk">[</span>${interests}<span class="mk">]</span>`)}
         ${contactLinks.map((l) => key(l.icon === 'mail' ? 'email' : l.icon, `<a href="${l.href}"${extAttrs(l.href)}>${l.href.startsWith('http') ? short(l.href) : l.label}</a>`)).join('')}
@@ -225,6 +228,8 @@ export class UI {
 
   hideIntro() {
     document.body.classList.add('playing');
+    this.intro.setAttribute('aria-hidden', 'true');
+    this.intro.inert = true;
   }
 
   openCard(s: Station, index: number, info: CardInfo) {
@@ -232,14 +237,14 @@ export class UI {
     document.body.classList.add('card-open');
     this.card.style.setProperty('--c', s.color);
     this.card.innerHTML = `
-      <button class="card-close" data-action="close-card" aria-label="Close">${ICONS.close}</button>
+      <button type="button" class="card-close" data-action="close-card" aria-label="Close">${ICONS.close}</button>
       <p class="tag"><span class="tag-dot"></span>// ${s.tag} <span class="tag-count">[${index + 1}/${stations.length}]</span></p>
       <h2 id="card-title">${s.title}</h2>
       <p class="blurb">${s.text}</p>
       ${s.links ? `<div class="links">${s.links.map(linkHtml).join('')}</div>` : ''}
       ${
         info.next
-          ? `<button class="next" data-action="travel" data-index="${info.next.index}">next: ${info.next.label} ${ICONS.arrow}</button>`
+          ? `<button type="button" class="next" data-action="travel" data-index="${info.next.index}">next: ${info.next.label} ${ICONS.arrow}</button>`
           : ''
       }`;
     this.card.setAttribute('aria-hidden', 'false');
@@ -268,6 +273,8 @@ export class UI {
   showClassic(canLeave: boolean) {
     this.canLeaveClassic = canLeave;
     this.classic.hidden = false;
+    this.intro.setAttribute('aria-hidden', 'true');
+    this.intro.inert = true;
     this.classic.querySelector<HTMLElement>('.back')!.hidden = !canLeave;
     this.classic.querySelector('.buffer')!.scrollTop = 0;
     this.classicOpen = true;
@@ -276,6 +283,10 @@ export class UI {
 
   hideClassic() {
     this.classic.hidden = true;
+    if (!document.body.classList.contains('playing')) {
+      this.intro.removeAttribute('aria-hidden');
+      this.intro.inert = false;
+    }
     this.classicOpen = false;
     this.handlers.classicChanged(false);
   }

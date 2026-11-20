@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { stations } from './content';
 
 export interface Collider {
   x: number;
@@ -11,7 +12,7 @@ export interface Collider {
 export const RING_RADIUS = 15;
 /** How far from the centre the bike may ride (the fence sits just outside). */
 export const PLAY_RADIUS = 25;
-export const STATION_COUNT = 8;
+export const STATION_COUNT = stations.length;
 export const FOG_COLOR = '#eaa37c';
 /** Campfire sits off to one side of the plaza so it doesn't block the starting view. */
 const FIRE = { x: -2.4, z: -1.6 };
@@ -148,22 +149,23 @@ export function createWorld(scene: THREE.Scene) {
   ring.receiveShadow = plaza.receiveShadow = true;
   scene.add(ring, plaza);
   const spokeGeo = new THREE.PlaneGeometry(1.5, RING_RADIUS - 5).rotateX(-Math.PI / 2);
+  const spokes = new THREE.InstancedMesh(spokeGeo, dirt, STATION_COUNT);
+  const m = new THREE.Matrix4();
+  const mid = (RING_RADIUS + 4) / 2;
   for (let i = 0; i < STATION_COUNT; i++) {
     const a = (i / STATION_COUNT) * Math.PI * 2;
-    const spoke = new THREE.Mesh(spokeGeo, dirt);
-    const mid = (RING_RADIUS + 4) / 2;
-    spoke.position.set(Math.sin(a) * mid, 0.015, Math.cos(a) * mid);
-    spoke.rotation.y = a;
-    spoke.receiveShadow = true;
-    scene.add(spoke);
+    m.makeRotationY(a).setPosition(Math.sin(a) * mid, 0.015, Math.cos(a) * mid);
+    spokes.setMatrixAt(i, m);
   }
+  spokes.receiveShadow = true;
+  spokes.computeBoundingSphere();
+  scene.add(spokes);
 
   // --- Fence marking the edge of the ride area --------------------------------
   const fenceR = PLAY_RADIUS + 1.3;
   const wood = std('#7a5636');
   const postCount = 100;
   const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 1.15, 0.16), wood, postCount);
-  const m = new THREE.Matrix4();
   for (let i = 0; i < postCount; i++) {
     const a = (i / postCount) * Math.PI * 2;
     m.makeRotationY(a).setPosition(Math.sin(a) * fenceR, 0.575, Math.cos(a) * fenceR);
@@ -179,11 +181,13 @@ export function createWorld(scene: THREE.Scene) {
   }
 
   // --- Pine forest -----------------------------------------------------------
-  const foliageGeo = mergeGeometries([
+  const foliageParts = [
     new THREE.ConeGeometry(1.45, 2.2, 7).translate(0, 2.0, 0),
     new THREE.ConeGeometry(1.1, 1.9, 7).translate(0, 3.0, 0),
     new THREE.ConeGeometry(0.72, 1.6, 7).translate(0, 3.95, 0),
-  ]);
+  ];
+  const foliageGeo = mergeGeometries(foliageParts);
+  foliageParts.forEach((part) => part.dispose());
   const trunkGeo = new THREE.CylinderGeometry(0.17, 0.26, 1.4, 6).translate(0, 0.7, 0);
   const treeCount = 300;
   const foliage = new THREE.InstancedMesh(foliageGeo, std('#ffffff'), treeCount);
@@ -293,6 +297,7 @@ export function createWorld(scene: THREE.Scene) {
     g.setAttribute('aKind', new THREE.BufferAttribute(aKind, 1));
     // Un-indexed so every facet gets its own normal: hard low-poly faces.
     const flat = g.toNonIndexed();
+    g.dispose();
     flat.computeVertexNormals();
     peaks.push(flat);
   };
@@ -306,8 +311,10 @@ export function createWorld(scene: THREE.Scene) {
   for (let i = 0; i < 18; i++) {
     addMountain(rand() * Math.PI * 2, 150 + rand() * 60, 14 + rand() * 16, 24 + rand() * 18, 0);
   }
+  const mountainGeo = mergeGeometries(peaks);
+  peaks.forEach((pk) => pk.dispose());
   const mountains = new THREE.Mesh(
-    mergeGeometries(peaks),
+    mountainGeo,
     new THREE.ShaderMaterial({
       uniforms: {
         sunDir: { value: sunDir },
@@ -371,15 +378,22 @@ export function createWorld(scene: THREE.Scene) {
   windowTex.colorSpace = THREE.SRGBColorSpace;
   windowTex.magFilter = THREE.NearestFilter;
   const cityMat = std('#3f4670', { emissive: '#ffffff', emissiveMap: windowTex, emissiveIntensity: 2.2 });
-  for (let i = 0; i < 18; i++) {
+  const buildingCount = 18;
+  const buildings = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), cityMat, buildingCount);
+  q.identity();
+  for (let i = 0; i < buildingCount; i++) {
     const a = (rand() - 0.5) * 0.32;
     const d = 140 + rand() * 12;
     const h = 6 + Math.pow(rand(), 1.5) * 24;
     const w = 3 + rand() * 4;
-    const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), cityMat);
-    b.position.set(Math.cos(a) * d, heightAt(Math.cos(a) * d, Math.sin(a) * d) + h / 2 - 1, Math.sin(a) * d);
-    scene.add(b);
+    const bx = Math.cos(a) * d;
+    const bz = Math.sin(a) * d;
+    p.set(bx, heightAt(bx, bz) + h / 2 - 1, bz);
+    s.set(w, h, w);
+    buildings.setMatrixAt(i, m.compose(p, q, s));
   }
+  buildings.computeBoundingSphere();
+  scene.add(buildings);
   const tower = new THREE.Group();
   const tx = 138;
   const towerMat = std('#3f4670');
@@ -475,37 +489,47 @@ export function createWorld(scene: THREE.Scene) {
   // --- Drifting low-poly clouds ---------------------------------------------
   const clouds = new THREE.Group();
   const cloudMat = new THREE.MeshStandardMaterial({ color: '#ffe9dc', emissive: '#f08f78', emissiveIntensity: 0.6, flatShading: true, fog: false });
+  const cloudMatrices: THREE.Matrix4[] = [];
+  const cloudPivot = new THREE.Object3D();
+  const puffObj = new THREE.Object3D();
+  cloudPivot.add(puffObj);
   for (let i = 0; i < 11; i++) {
-    const cloud = new THREE.Group();
     const puffs = 3 + Math.floor(rand() * 3);
-    for (let k = 0; k < puffs; k++) {
-      const puff = new THREE.Mesh(new THREE.IcosahedronGeometry(5 + rand() * 5, 0), cloudMat);
-      puff.position.set(k * 7 - puffs * 3.5, rand() * 3, (rand() - 0.5) * 6);
-      puff.scale.y = 0.6;
-      cloud.add(puff);
-    }
     const a = rand() * Math.PI * 2;
     const d = 220 + rand() * 120;
-    cloud.position.set(Math.cos(a) * d, 70 + rand() * 45, Math.sin(a) * d);
-    cloud.lookAt(0, cloud.position.y, 0);
-    clouds.add(cloud);
+    cloudPivot.position.set(Math.cos(a) * d, 70 + rand() * 45, Math.sin(a) * d);
+    cloudPivot.lookAt(0, cloudPivot.position.y, 0);
+    cloudPivot.updateMatrix();
+    for (let k = 0; k < puffs; k++) {
+      const r = 5 + rand() * 5;
+      puffObj.position.set(k * 7 - puffs * 3.5, rand() * 3, (rand() - 0.5) * 6);
+      puffObj.scale.set(r, r * 0.6, r);
+      puffObj.updateMatrix();
+      cloudMatrices.push(new THREE.Matrix4().multiplyMatrices(cloudPivot.matrix, puffObj.matrix));
+    }
   }
+  const cloudMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), cloudMat, cloudMatrices.length);
+  cloudMatrices.forEach((cm, i) => cloudMesh.setMatrixAt(i, cm));
+  cloudMesh.computeBoundingSphere();
+  clouds.add(cloudMesh);
   scene.add(clouds);
   updaters.push((t) => (clouds.rotation.y = t * 0.004));
 
   // --- Campfire in the plaza ---------------------------------------------------
   const fire = new THREE.Group();
   const stone = std('#8d8a83');
+  const stoneGeo = new THREE.DodecahedronGeometry(0.22, 0);
   for (let i = 0; i < 9; i++) {
     const a = (i / 9) * Math.PI * 2;
-    const st = new THREE.Mesh(new THREE.DodecahedronGeometry(0.22, 0), stone);
+    const st = new THREE.Mesh(stoneGeo, stone);
     st.position.set(Math.sin(a) * 0.75, 0.12, Math.cos(a) * 0.75);
     st.castShadow = true;
     fire.add(st);
   }
   const logMat = std('#5b3a22');
+  const logGeo = new THREE.CylinderGeometry(0.09, 0.09, 1.1, 6);
   for (let i = 0; i < 3; i++) {
-    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 1.1, 6), logMat);
+    const log = new THREE.Mesh(logGeo, logMat);
     log.rotation.set(Math.PI / 2 - 0.35, (i / 3) * Math.PI, 0);
     log.position.y = 0.25;
     log.castShadow = true;

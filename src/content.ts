@@ -3,6 +3,7 @@
 
 export const profile = {
   name: 'Greg Chlosta',
+  site: 'https://gregchlosta.tech',
   headline: 'software · AI · fixer of things',
   intro:
     "I love creating and building things: code, AI, and anything that moves. Motorcycles, cars, mountain bikes... I like to fix them and I'm always curious how things work.",
