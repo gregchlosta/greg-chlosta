@@ -5,6 +5,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
+import { createAvatarStage } from './avatar';
 import { stations, type Station } from './content';
 import { Particles } from './effects';
 import { Input } from './input';
@@ -85,6 +86,13 @@ export function startValley(ui: UI) {
     new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }),
   );
   composer.addPass(new RenderPass(scene, camera));
+  // Greg's bust on the landing screen: its own scene and lights, drawn over the valley.
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const avatar = createAvatarStage(reducedMotion);
+  const avatarPass = new RenderPass(avatar.scene, avatar.camera);
+  avatarPass.clear = false;
+  avatarPass.clearDepth = true;
+  composer.addPass(avatarPass);
   // Glints off chrome and glass can overflow a half-float buffer; one such pixel would be
   // smeared across the whole frame by the blur, so cap highlights before they reach it.
   composer.addPass(
@@ -270,6 +278,7 @@ export function startValley(ui: UI) {
     start() {
       state = 'play';
       ui.hideIntro();
+      avatar.exit();
     },
     travel,
     closeCard,
@@ -354,7 +363,6 @@ export function startValley(ui: UI) {
     }
   }
 
-  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let baseFov = 55;
   let fovKick = 0;
   const camPos = new THREE.Vector3(Math.sin(INTRO_ANGLE) * 36, 11, Math.cos(INTRO_ANGLE) * 36);
@@ -450,6 +458,7 @@ export function startValley(ui: UI) {
     world.update(t);
     particles.update(dt);
     updateCamera(dt, t);
+    avatar.update(dt, t);
   }
 
   function resize() {
@@ -465,7 +474,16 @@ export function startValley(ui: UI) {
     baseFov = camera.aspect < 0.8 ? 62 : 55;
     camera.fov = baseFov + fovKick;
     camera.updateProjectionMatrix();
+    layoutAvatar();
   }
+
+  const introCard = document.querySelector<HTMLElement>('.intro-inner')!;
+  function layoutAvatar() {
+    avatar.layout(innerWidth, innerHeight, introCard.getBoundingClientRect());
+  }
+  // The card's size settles once the web fonts arrive and its rise-in animation ends.
+  document.fonts?.ready.then(layoutAvatar);
+  introCard.addEventListener('animationend', layoutAvatar);
 
   // Slow device? Trade resolution first, then the bloom, rather than drop frames.
   let slowTime = 0;
@@ -498,8 +516,17 @@ export function startValley(ui: UI) {
     if (document.visibilityState === 'visible') watchFrameRate(rawDt);
     elapsed += dt;
     step(dt, elapsed);
+    avatarPass.enabled = avatar.visible;
     if (composer) composer.render(dt);
-    else renderer.render(scene, camera);
+    else {
+      renderer.render(scene, camera);
+      if (avatar.visible) {
+        renderer.autoClear = false;
+        renderer.clearDepth();
+        renderer.render(avatar.scene, avatar.camera);
+        renderer.autoClear = true;
+      }
+    }
     if (state === 'play') labels.render(scene, camera);
   });
   document.body.classList.add('ready');
