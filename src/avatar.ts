@@ -297,12 +297,13 @@ function hairBaseGeometry() {
   const top = new THREE.Color(COLORS.hairBase);
   const side = new THREE.Color(COLORS.hairSide);
   const light = new THREE.Color(COLORS.hairLight);
+  const dark = new THREE.Color(COLORS.hairDark);
   const c = new THREE.Color();
-  const rows = 28;
+  const rows = 36;
   const centre = V(0, 0.04, -0.04);
   const n = V();
   return smoothGridGeometry(
-    72,
+    84,
     rows,
     (az, v, out) => {
       const edge = v >= 1;
@@ -310,89 +311,32 @@ function hairBaseGeometry() {
       skull(az, phi, out);
       const y = out.y;
       const front = Math.max(0, Math.cos(az));
-      // Snug fade on the sides, fuller sculpted volume on top & crown.
-      let thick = 0.012 + 0.036 * smoothstep(0.14, 0.42, y) * (0.65 + 0.35 * front);
-      thick += 0.014 * front ** 2 * gauss(out.x / 0.19, (y - 0.34) / 0.08);
-      // Soft directional flow ridges instead of noisy spikes.
-      thick += 0.004 * smoothstep(0.18, 0.4, y) * Math.sin(az * 10 - y * 14);
+      // Clean stylized crew-cut silhouette: crisp short fade on the sides, plush fullness on top
+      // with a soft, natural front lift (slight sweep to the right).
+      const topMask = smoothstep(0.15, 0.35, y);
+      let thick = 0.012 + 0.052 * topMask * (0.66 + 0.34 * front);
+      // Soft front quiff lift across the forehead
+      thick += 0.032 * front ** 2 * gauss((out.x - 0.02) / 0.19, (y - 0.355) / 0.09);
+      // Gentle, broad stylized hair flow (subtle directional waves, never bumpy)
+      const flow = Math.sin(az * 7 - y * 10 + 0.6) * 0.55 + Math.sin(az * 13 + y * 8) * 0.45;
+      thick += 0.006 * topMask * flow;
       if (edge) thick = -0.003;
       n.copy(out).sub(centre).normalize();
       return out.addScaledVector(n, thick);
     },
     (p, az) => {
-      c.copy(top).lerp(side, smoothstep(0.3, 0.06, p.y));
-      // Soft glossy highlight band across the upper crown.
-      const sheen = Math.exp(-(((p.y - 0.42) / 0.055) ** 2)) * smoothstep(-0.2, 0.7, Math.cos(az));
-      c.lerp(light, sheen * 0.45);
+      c.copy(top).lerp(side, smoothstep(0.28, 0.05, p.y));
+      // Soft painted stylized strand shading
+      const topMask = smoothstep(0.18, 0.36, p.y);
+      const strand = Math.sin(az * 11 - p.y * 12) * 0.5 + 0.5;
+      c.lerp(dark, (1 - strand) * 0.22 * topMask);
+      // Warm sunlit sheen across the upper front crown
+      const sheen = Math.exp(-(((p.y - 0.435) / 0.065) ** 2)) * smoothstep(-0.2, 0.75, Math.cos(az));
+      c.lerp(light, sheen * 0.52);
       return c.clone();
     },
     false,
   );
-}
-
-/** Layered, plump cartoon hair tufts across the top and front hairline. */
-function buildHairTufts(parent: THREE.Object3D) {
-  const g = new THREE.Group();
-  parent.add(g);
-
-  // Sculpted teardrop lock geometry shared across tufts.
-  const lockGeo = new THREE.SphereGeometry(1, 16, 12);
-  const lp = lockGeo.attributes.position;
-  for (let i = 0; i < lp.count; i++) {
-    const x = lp.getX(i);
-    const y = lp.getY(i);
-    const z = lp.getZ(i);
-    // Taper gently toward the front tip (+z) and flatten slightly underneath.
-    const taper = 1 - 0.35 * smoothstep(0.0, 1.0, z);
-    const arch = 0.14 * (1 - z * z);
-    lp.setXYZ(i, x * taper, y * (y < 0 ? 0.65 : 1) + arch, z);
-  }
-  lockGeo.computeVertexNormals();
-
-  const mats = [
-    cartoonMat(COLORS.hairMid, { roughness: 0.56 }),
-    cartoonMat(COLORS.hairLight, { roughness: 0.52 }),
-    cartoonMat(COLORS.hairBase, { roughness: 0.6 }),
-    cartoonMat(COLORS.hairDark, { roughness: 0.64 }),
-  ];
-
-  // [x, y, z, sx, sy, sz, rx, ry, rz, matIndex]
-  // Front-to-back textured crew cut with a subtle lift and sweep to the right.
-  const tufts: [number, number, number, number, number, number, number, number, number, number][] = [
-    // Front hairline swoops (signature short lifted crew cut)
-    [-0.17, 0.34, 0.255, 0.068, 0.044, 0.115, -0.35, -0.38, 0.28, 2],
-    [-0.095, 0.375, 0.285, 0.075, 0.05, 0.125, -0.45, -0.18, 0.16, 0],
-    [-0.015, 0.395, 0.295, 0.082, 0.056, 0.135, -0.5, 0.06, 0.04, 1],
-    [0.075, 0.39, 0.285, 0.08, 0.054, 0.13, -0.46, 0.24, -0.1, 0],
-    [0.155, 0.36, 0.26, 0.072, 0.046, 0.118, -0.36, 0.42, -0.22, 2],
-    [0.225, 0.31, 0.205, 0.056, 0.038, 0.095, -0.22, 0.68, -0.35, 3],
-    [-0.23, 0.3, 0.2, 0.054, 0.036, 0.092, -0.2, -0.68, 0.35, 3],
-
-    // Mid-top textured volume
-    [-0.155, 0.435, 0.12, 0.085, 0.052, 0.145, -0.18, -0.25, 0.26, 0],
-    [-0.055, 0.475, 0.14, 0.095, 0.058, 0.155, -0.24, -0.05, 0.1, 1],
-    [0.055, 0.475, 0.135, 0.095, 0.058, 0.155, -0.22, 0.14, -0.08, 0],
-    [0.16, 0.435, 0.115, 0.085, 0.052, 0.14, -0.16, 0.32, -0.24, 2],
-
-    // Crown & upper back fullness
-    [-0.14, 0.465, -0.06, 0.095, 0.056, 0.16, 0.12, -0.22, 0.28, 2],
-    [0.0, 0.495, -0.04, 0.11, 0.06, 0.17, 0.08, 0.05, 0.0, 1],
-    [0.14, 0.465, -0.06, 0.095, 0.056, 0.16, 0.12, 0.24, -0.26, 0],
-    [-0.11, 0.415, -0.22, 0.095, 0.054, 0.15, 0.42, -0.2, 0.24, 3],
-    [0.0, 0.44, -0.23, 0.105, 0.058, 0.16, 0.45, 0.0, 0.0, 2],
-    [0.11, 0.415, -0.22, 0.095, 0.054, 0.15, 0.42, 0.2, -0.24, 3],
-
-    // Upper temple blend tufts
-    [-0.255, 0.335, 0.04, 0.062, 0.042, 0.12, 0.05, -0.65, 0.55, 2],
-    [0.255, 0.335, 0.04, 0.062, 0.042, 0.12, 0.05, 0.65, -0.55, 2],
-  ];
-
-  for (const [x, y, z, sx, sy, sz, rx, ry, rz, mi] of tufts) {
-    const m = part(g, lockGeo, mats[mi]);
-    m.position.set(x, y, z);
-    m.scale.set(sx, sy, sz);
-    m.rotation.set(rx, ry, rz);
-  }
 }
 
 // --- Nose -----------------------------------------------------------------------------------
@@ -574,46 +518,47 @@ function buildEye(parent: THREE.Object3D, s: number, surfaceZ: (x: number, y: nu
   );
   ball.add(irisMesh);
 
-  // Crisp cartoon catchlights on the cornea (stay slightly below bloom threshold)
+  // Crisp cartoon catchlights on the cornea (tucked cleanly inside the eyelid radius)
   const glintMat = new THREE.MeshBasicMaterial({ color: '#f4f8ff' });
   const addGlint = (r: number, gx: number, gy: number) => {
     const m = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8), glintMat);
-    const gz = Math.sqrt(Math.max(0.0001, (eyeR + 0.0022) ** 2 - gx * gx - gy * gy));
+    const gz = Math.sqrt(Math.max(0.0001, (eyeR + 0.0016) ** 2 - gx * gx - gy * gy));
     m.position.set(gx, gy, gz);
-    m.scale.z = 0.35;
+    m.scale.z = 0.28;
     ball.add(m);
   };
-  addGlint(0.0072, 0.011, 0.011);
-  addGlint(0.0034, -0.009, -0.008);
+  addGlint(0.0068, 0.01, 0.009);
+  addGlint(0.0032, -0.0085, -0.0075);
 
   // Smooth cartoon upper eyelid + graceful tapered lash line
-  const lidR = eyeR + 0.0045;
+  const lidR = eyeR + 0.0055;
   const lidGeo = new THREE.SphereGeometry(lidR, 28, 12, 0, Math.PI * 2, 0, Math.PI * 0.52);
   const lidMat = cartoonMat(COLORS.skin, { side: THREE.DoubleSide });
 
   const lid = new THREE.Group();
+  lid.rotation.x = -0.58;
   g.add(lid);
   part(lid, lidGeo, lidMat);
 
   // Tapered lash line along the front rim of the upper eyelid
   const lashPts: V3[] = [];
   for (let i = 0; i <= 10; i++) {
-    const a = -0.1 + (i / 10) * (Math.PI + 0.2);
-    const lx = Math.cos(a) * (lidR + 0.0015);
-    const lz = Math.sin(a) * (lidR + 0.0015);
+    const a = 0.05 + (i / 10) * (Math.PI - 0.1);
+    const lx = Math.cos(a) * (lidR + 0.0012);
+    const lz = Math.sin(a) * (lidR + 0.0012);
     lashPts.push(V(lx, -0.001, lz));
   }
   const lash = new THREE.Mesh(
-    taperedTubeGeometry(lashPts, 0.0052, 24, 8, (t) => 0.35 + 0.65 * Math.sin(t * Math.PI) ** 0.6),
+    taperedTubeGeometry(lashPts, 0.0048, 24, 8, (t) => 0.35 + 0.65 * Math.sin(t * Math.PI) ** 0.6),
     cartoonMat(COLORS.lash, { roughness: 0.7 }),
   );
   lid.add(lash);
 
   // Soft lower eyelid cupping the bottom of the eyeball
   const lower = new THREE.Group();
-  lower.rotation.x = Math.PI + 0.72;
+  lower.rotation.x = Math.PI + 0.92;
   g.add(lower);
-  part(lower, new THREE.SphereGeometry(eyeR + 0.0032, 24, 10, 0, Math.PI * 2, 0, Math.PI * 0.45), lidMat);
+  part(lower, new THREE.SphereGeometry(eyeR + 0.0035, 24, 10, 0, Math.PI * 2, 0, Math.PI * 0.45), lidMat);
 
   return { lid, ball };
 }
@@ -651,7 +596,7 @@ function buildBrow(parent: THREE.Object3D, s: number, surfaceZ: (x: number, y: n
   geo.computeVertexNormals();
   const m = part(parent, geo, cartoonMat(COLORS.brow, { roughness: 0.68 }));
   const x = s * 0.128;
-  const y = 0.092;
+  const y = 0.098;
   m.position.set(x, y, surfaceZ(x, y) - 0.006);
   m.rotation.set(0, s * 0.26, -s * 0.05);
   return m;
@@ -746,16 +691,16 @@ function buildEar(parent: THREE.Object3D, s: number) {
   outerGeo.computeVertexNormals();
   part(g, outerGeo, cartoonMat(COLORS.ear));
 
-  // Warm recessed inner ear bowl
+  // Warm recessed inner ear bowl (tucked cleanly inside the outer ear silhouette)
   const innerGeo = new THREE.SphereGeometry(1, 18, 12);
-  innerGeo.scale(0.022, 0.095, 0.052);
-  innerGeo.translate(s * 0.024, 0.004, 0.004);
+  innerGeo.scale(0.018, 0.088, 0.044);
+  innerGeo.translate(s * 0.019, 0.004, -0.004);
   part(g, innerGeo, cartoonMat(COLORS.earIn, { roughness: 0.78 }));
 
-  // Smooth inner cartilage ridge (fits cleanly inside the ear with zero protruding ends)
+  // Smooth inner cartilage ridge
   const ridgeGeo = new THREE.SphereGeometry(1, 14, 10);
-  ridgeGeo.scale(0.016, 0.056, 0.024);
-  ridgeGeo.translate(s * 0.028, -0.004, 0.012);
+  ridgeGeo.scale(0.013, 0.052, 0.02);
+  ridgeGeo.translate(s * 0.024, -0.004, 0.005);
   part(g, ridgeGeo, cartoonMat(COLORS.ear));
 }
 
@@ -869,8 +814,7 @@ export function createAvatarStage(reducedMotion: boolean): AvatarStage {
 
   const headGeo = headGeometry();
   part(head, headGeo, cartoonMat(null));
-  part(head, hairBaseGeometry(), cartoonMat(null, { roughness: 0.6 }));
-  buildHairTufts(head);
+  part(head, hairBaseGeometry(), cartoonMat(null, { roughness: 0.58 }));
 
   const noseGeo = noseGeometry(surfaceProbe(headGeo));
   part(head, noseGeo, cartoonMat(null));
@@ -1008,7 +952,7 @@ export function createAvatarStage(reducedMotion: boolean): AvatarStage {
         nextBlink = t + (Math.random() < 0.22 ? 0.24 : 2.1 + Math.random() * 3.4);
       } else close = Math.sin(Math.PI * p);
     }
-    const open = -0.52 - excited * 0.22;
+    const open = -0.58 - excited * 0.22;
     for (const eye of eyes) eye.lid.rotation.x = open + (0.62 - open) * close;
   }
 
